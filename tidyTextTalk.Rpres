@@ -1,0 +1,407 @@
+<style>
+.small-code pre code {
+font-size: 1em;
+}
+</style>
+
+Analysing text data with tidytext
+========================================================
+author: Chris Beeley
+date: July 2018
+autosize: true
+
+The tidyverse
+========================================================
+
+<!-- https://support.rstudio.com/hc/en-us/articles/200486468 -->
+
+- When all this were fields... (ggplot and reshape)
+- Tidy data is a whole approach
+- The tidyverse
+- Similar principles to relational databases and Codd's relational algebra
+- If you use the tidyverse you should read [this paper](https://www.jstatsoft.org/article/view/v059i10/v59i10.pdf)
+
+Tidy data (Wickham, 2014)
+=======================================================
+
+- In tidy data:
+- Each variable forms a column
+- Each observation forms a row
+- Each type of observational unit forms a table
+
+This is the third normal form (Codd, 1990) familiar from the world of relational databases
+
+<!-- Add this too? http://tutorials.quanteda.io/-->
+
+Tidytext
+========================================================
+
+Examples and code inspired by the excellent [Text Mining with R](http://tidytextmining.com/)
+
+```{r}
+
+library(tidyverse)
+library(tidytext)
+library(pander)
+library(knitr)
+library(magrittr)
+library(tm)
+
+load("loadData.Rdata")
+
+set.seed(2014)
+
+# subsetData = trustData %>%
+#   filter(Optout == "No" || is.na(Optout)) %>%
+#   filter(!is.na(Improve), !is.na(Best)) %>%
+#   sample_n(5000) %>%
+#   select(Improve, Best, Service,  Directorate2)
+# 
+# save(subsetData, file = "loadData.Rdata")
+
+```
+
+Tidy text analysis
+========================================================
+class: small-code
+
+```{r, results = "asis"}
+
+tidy_data = subsetData %>%
+  gather(Type, Comment, Improve, Best)
+
+tidy_comments = tidy_data %>%
+  unnest_tokens(word, Comment)
+
+tidy_comments <- tidy_comments %>%
+  anti_join(stop_words)
+
+tidy_comments %>%
+  count(word, sort = TRUE) %>%
+  slice(1:10) %>%
+  as.data.frame %>%
+  pandoc.table()
+
+```
+
+Show graphically
+=======================================================
+class: small-code
+
+```{r}
+
+tidy_comments %>%
+  group_by(Type) %>%
+  count(word, sort = TRUE) %>%
+  filter(n > 100) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n)) +
+  geom_col() +
+  xlab(NULL) +
+  coord_flip() + facet_wrap(~ Type)
+
+```
+
+Log odds (setup)
+=======================================================
+
+```{r}
+
+word_ratios = tidy_comments %>%
+  count(word, Type) %>%
+  filter(sum(n) >= 10) %>%
+  ungroup() %>%
+  spread(Type, n, fill = 0) %>%
+  mutate_if(is.numeric, funs((. + 1) / sum(. + 1))) %>%
+  mutate(logratio = log(Best / Improve)) %>%
+  arrange(desc(logratio))
+
+```
+
+Log odds
+=======================================================
+
+```{r, eval = FALSE, echo = TRUE}
+
+word_ratios %>%
+  group_by(logratio < 0) %>%
+  top_n(15, abs(logratio)) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, logratio)) %>%
+  ggplot(aes(word, logratio, fill = logratio < 0)) +
+  geom_col() +
+  coord_flip() +
+  ylab("log odds ratio (Compliment/Criticism)") +
+  scale_fill_discrete(name = "", labels = c("Compliment", "Criticism"))
+
+```
+
+Log odds
+=======================================================
+
+```{r, echo = FALSE}
+
+word_ratios %>%
+  group_by(logratio < 0) %>%
+  top_n(15, abs(logratio)) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, logratio)) %>%
+  ggplot(aes(word, logratio, fill = logratio < 0)) +
+  geom_col() +
+  coord_flip() +
+  ylab("log odds ratio (Compliment/Criticism)") +
+  scale_fill_discrete(name = "", labels = c("Compliment", "Criticism"))
+
+```
+
+Sentiment analysis in R with tidytext
+=========================================================
+
+```{r, eval = FALSE, echo = TRUE}
+
+tidy_comments %>% 
+  filter(!is.na(Directorate2)) %>%
+  mutate(id = row_number()) %>%
+  inner_join(get_sentiments("afinn")) %>% 
+  group_by(Directorate2) %>%
+  summarize(words = n(),
+            quotes = n_distinct(id),
+            sentiment = mean(score)) %>%
+  mutate(Directorate = reorder(Directorate2, sentiment)) %>%
+  ggplot(aes(Directorate, sentiment, fill = sentiment > 0)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  ylab("Average AFINN sentiment") +
+  ggtitle("Average sentiment across directorates") +
+  coord_flip()
+
+```
+
+Sentiment analysis in R with tidytext
+=========================================================
+
+```{r, echo = FALSE}
+
+tidy_comments %>% 
+  filter(!is.na(Directorate2)) %>%
+  mutate(id = row_number()) %>%
+  inner_join(get_sentiments("afinn")) %>% 
+  group_by(Directorate2) %>%
+  summarize(words = n(),
+            quotes = n_distinct(id),
+            sentiment = mean(score)) %>%
+  mutate(Directorate = reorder(Directorate2, sentiment)) %>%
+  ggplot(aes(Directorate, sentiment, fill = sentiment > 0)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  ylab("Average AFINN sentiment") +
+  ggtitle("Average sentiment across directorates") +
+  coord_flip()
+
+```
+
+SentimentR- all comments
+=========================================================
+class: small-code
+
+```{r}
+
+library(sentimentr)
+
+# tidy dataframe of positive/ negative comments
+
+tidySentiment = subsetData %>%
+  filter(!is.na(Service)) %>%
+  select(Improve, Best, Service) %>%
+  gather(key = Type, value = comment, -Service) %>%
+  mutate(comment = get_sentences(comment)) %>%
+  mutate(Service = round(Service, 0))
+
+# sentiment analysis of all comments
+
+tidySentiment %$%
+  sentiment(comment)
+
+```
+
+SentimentR- by score
+=========================================================
+class: small-code
+
+```{r}
+
+# look at the connection between score on questionnaire and sentiment
+
+(service = tidySentiment %$%
+   sentiment_by(comment, Service))
+
+plot(service)
+
+```
+
+SentimentR- by score and type
+=========================================================
+class: small-code
+
+```{r}
+
+(typeSentiment = tidySentiment %$%
+   sentiment_by(comment, list(Type, Service)))
+
+plot(typeSentiment)
+
+```
+
+Wordclouds- emotion comparisons
+=========================================================
+class: small-code
+
+Going to leave the tidyverse now and look at word clouds. People get very angry about word clouds but they look cool. Just don't take them too seriously and you'll be fine.
+
+Inspired by a blog post [https://colinpriest.com/2017/04/30/tutorial-sentiment-analysis-of-airlines-using-the-syuzhet-package-and-twitter/](https://colinpriest.com/2017/04/30/tutorial-sentiment-analysis-of-airlines-using-the-syuzhet-package-and-twitter/)
+
+Wordclouds- emotion comparisons
+=========================================================
+class: small-code
+
+```{r}
+
+library(syuzhet)
+library(wordcloud)
+
+# get the sentiment scores for the tweets
+
+nrcComments = get_nrc_sentiment(subsetData$Improve)
+
+# put the text in
+
+nrcComments$Text = subsetData$Improve
+
+all = c(
+  paste(nrcComments$Text[nrcComments$anger > 0], collapse=" "),
+  paste(nrcComments$Text[nrcComments$anticipation > 0], collapse=" "),
+  paste(nrcComments$Text[nrcComments$disgust > 0], collapse=" "),
+  paste(nrcComments$Text[nrcComments$fear > 0], collapse=" "),
+  paste(nrcComments$Text[nrcComments$joy > 0], collapse=" "),
+  paste(nrcComments$Text[nrcComments$sadness > 0], collapse=" "),
+  paste(nrcComments$Text[nrcComments$surprise > 0], collapse=" "),
+  paste(nrcComments$Text[nrcComments$trust > 0], collapse=" ")
+)
+
+# ... some boring code hidden, I'll distribute the code if anyone wants it
+
+```
+
+Wordclouds- emotion comparisons
+=========================================================
+class: small-code
+
+```{r echo = FALSE}
+
+# clean the text
+
+clean.text = function(x)
+{
+  # tolower
+  x = tolower(x)
+  # remove rt
+  x = gsub("rt", "", x)
+  # remove at
+  x = gsub("@\\w+", "", x)
+  # remove punctuation
+  x = gsub("[[:punct:]]", "", x)
+  # remove numbers
+  x = gsub("[[:digit:]]", "", x)
+  # remove links http
+  x = gsub("http\\w+", "", x)
+  # remove tabs
+  x = gsub("[ |\t]{2,}", "", x)
+  # remove blank spaces at the beginning
+  x = gsub("^ ", "", x)
+  # remove blank spaces at the end
+  x = gsub(" $", "", x)
+  return(x)
+}
+
+all = clean.text(all)
+
+# remove stop-words
+# adding extra domain specific stop words
+all = removeWords(all, c(stopwords("english"), "rampton"))
+
+```
+
+```{r}
+
+# create corpus
+corpus = Corpus(VectorSource(all))
+
+# create term-document matrix
+tdm = TermDocumentMatrix(corpus)
+
+# convert as matrix
+tdm = as.matrix(tdm)
+
+# add column names
+colnames(tdm) = c('anger', 'anticipation', 'disgust', 'fear', 
+                  'joy', 'sadness', 'surprise', 'trust')
+
+```
+
+Wordclouds- emotion comparisons
+=========================================================
+class: small-code
+
+```{r}
+
+# Plot comparison wordcloud
+layout(matrix(c(1, 2), nrow = 2), heights = c(1, 4))
+par(mar = rep(0, 4))
+plot.new()
+text(x = 0.5, y=0.5, 'Emotion Comparison Word Cloud')
+
+comparison.cloud(tdm, random.order = FALSE,
+                 colors = c("#00B2FF", "red", "#FF0099", "#6600CC", 
+                            "green", "orange", "blue", "brown"),
+                 title.size = 1.5, max.words = 250)
+
+```
+
+Wordcloud2
+==================================
+class: small-code
+
+```{r}
+
+library(wordcloud2)
+
+df_title <- data.frame(doc_id = row.names(subsetData),
+                       text = subsetData$Best)
+
+mycorpus = Corpus(DataframeSource(df_title))
+
+corpusmap <- tm_map(mycorpus, removePunctuation)
+corpusmap <- 
+  tm_map(corpusmap, 
+         function(x) {
+           removeWords(x, 
+                       c("Nothing", "they", "dont", stopwords()))
+         }
+  )
+
+# demoFreq is a data.frame including word and freq in each colum
+
+tdm <- TermDocumentMatrix(corpusmap)
+m <- as.matrix(tdm)
+v <- sort(rowSums(m), decreasing = TRUE)
+demoFreq <- data.frame(word = names(v), freq = v)
+
+# there's a bug in the package so having to do this by hand in markdown
+
+# wordcloud2(demoFreq[1:400, ], 
+# figPath = "~/Nextcloud/Presentations/tidyText/nhs.png", size = 1.5)
+
+```
+
+Wordcloud2
+===================================
+
+![](Rplot01.png)
